@@ -3,16 +3,12 @@ package com.mycompany.laberintoswing;
 import javax.swing.*;
 import java.awt.*;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Random;
-import java.util.Set;
+import java.util.Stack;
 
 public class LaberintoSwing extends JFrame {
 
@@ -37,13 +33,15 @@ public class LaberintoSwing extends JFrame {
     private JButton botonLimpiar;
 
     private javax.swing.Timer timer;
-    private ResultadoBusqueda resultadoActual;
-    private int indiceExplorado;
-    private int indiceSolucion;
-    private boolean mostrandoSolucion;
+
+    private Stack<PasoDFS> pilaExploracion;
+    private boolean[][] visitado;
+    private List<Celda> caminoActual;
+    private List<Celda> caminoFinal;
+    private boolean solucionEncontrada;
 
     public LaberintoSwing() {
-        setTitle("Laberinto Autónomo - Prim + Caminos Extra + A*");
+        setTitle("Laberinto Autónomo - Exploración DFS con Backtracking");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
@@ -56,7 +54,7 @@ public class LaberintoSwing extends JFrame {
 
         comboDificultad = new JComboBox<>(opciones);
         botonGenerar = new JButton("Generar nuevo laberinto");
-        botonResolver = new JButton("Resolver automáticamente");
+        botonResolver = new JButton("Explorar automáticamente");
         botonLimpiar = new JButton("Limpiar recorrido");
 
         JPanel panelSuperior = new JPanel(new FlowLayout(FlowLayout.CENTER));
@@ -76,7 +74,7 @@ public class LaberintoSwing extends JFrame {
             generarNuevoLaberinto(dificultad);
         });
 
-        botonResolver.addActionListener(e -> resolverAutomaticamente());
+        botonResolver.addActionListener(e -> iniciarExploracionAutomatica());
 
         botonLimpiar.addActionListener(e -> {
             detenerTimer();
@@ -99,23 +97,22 @@ public class LaberintoSwing extends JFrame {
         laberinto = crearTerreno(tamano, tamano);
 
         /*
-         * ALGORITMO 1: Prim aleatorizado.
-         * Este algoritmo genera el laberinto base desde paredes completas.
-         * Es diferente al DFS de la versión anterior.
+         * ALGORITMO DE CREACIÓN:
+         * Prim aleatorizado.
+         * El laberinto se interpreta como un grafo:
+         * celdas = nodos, conexiones abiertas = aristas.
          */
         generarConPrimAleatorizado(laberinto);
 
         /*
-         * ALGORITMO 2: Braid maze / apertura de ciclos.
-         * Rompe paredes estratégicamente para crear varios caminos alternativos.
-         * Esto hace que el laberinto no tenga una resolución tan lineal.
+         * ALGORITMO EXTRA:
+         * Se abren paredes internas para crear ciclos y caminos alternativos.
+         * Así el laberinto no queda tan lineal.
          */
         crearCaminosAlternativos(laberinto, dificultad);
 
         /*
-         * ALGORITMO 3: BFS.
-         * Busca dos puntos muy alejados para colocar una sola entrada y una sola
-         * salida.
+         * BFS se usa solo para colocar una entrada y una salida alejadas.
          */
         colocarEntradaYSalidaLejanas(laberinto);
 
@@ -370,12 +367,12 @@ public class LaberintoSwing extends JFrame {
     }
 
     private Celda encontrarCeldaMasLejana(int[][] laberinto, Celda inicio) {
-        boolean[][] visitado = new boolean[laberinto.length][laberinto[0].length];
+        boolean[][] visitadoBFS = new boolean[laberinto.length][laberinto[0].length];
         int[][] distancia = new int[laberinto.length][laberinto[0].length];
 
         Queue<Celda> cola = new LinkedList<>();
         cola.add(inicio);
-        visitado[inicio.fila][inicio.columna] = true;
+        visitadoBFS[inicio.fila][inicio.columna] = true;
 
         Celda masLejana = inicio;
 
@@ -398,9 +395,9 @@ public class LaberintoSwing extends JFrame {
                 int nuevaColumna = actual.columna + direccion[1];
 
                 if (esPosicionValidaParaCaminar(laberinto, nuevaFila, nuevaColumna)
-                        && !visitado[nuevaFila][nuevaColumna]) {
+                        && !visitadoBFS[nuevaFila][nuevaColumna]) {
 
-                    visitado[nuevaFila][nuevaColumna] = true;
+                    visitadoBFS[nuevaFila][nuevaColumna] = true;
                     distancia[nuevaFila][nuevaColumna] = distancia[actual.fila][actual.columna] + 1;
 
                     cola.add(new Celda(nuevaFila, nuevaColumna));
@@ -425,168 +422,164 @@ public class LaberintoSwing extends JFrame {
         return caminos;
     }
 
-    private void resolverAutomaticamente() {
+    /*
+     * RESOLUCIÓN AUTÓNOMA EXPLORANDO:
+     * Aquí ya NO se usa A* como solución rápida.
+     * Ahora el autómata explora con DFS + backtracking.
+     * El jugador azul se mueve físicamente por el laberinto,
+     * prueba caminos, retrocede si llega a un callejón sin salida
+     * y finalmente marca la ruta correcta en cian.
+     */
+    private void iniciarExploracionAutomatica() {
         detenerTimer();
         limpiarRecorridoAnterior();
 
-        resultadoActual = resolverConAEstrella(laberinto, entrada, salida);
+        visitado = new boolean[laberinto.length][laberinto[0].length];
+        pilaExploracion = new Stack<>();
+        caminoActual = new ArrayList<>();
+        caminoFinal = new ArrayList<>();
+        solucionEncontrada = false;
 
-        if (resultadoActual.camino.isEmpty()) {
+        jugador = new Celda(entrada.fila, entrada.columna);
+        visitado[entrada.fila][entrada.columna] = true;
+        caminoActual.add(new Celda(entrada.fila, entrada.columna));
+        pilaExploracion.push(new PasoDFS(new Celda(entrada.fila, entrada.columna), obtenerDireccionesAleatorias()));
+
+        timer = new javax.swing.Timer(90, e -> avanzarExploracionDFS());
+        timer.start();
+    }
+
+    private void avanzarExploracionDFS() {
+        if (solucionEncontrada) {
+            animarCaminoFinal();
+            return;
+        }
+
+        if (pilaExploracion.isEmpty()) {
+            detenerTimer();
             JOptionPane.showMessageDialog(
                     this,
-                    "No se encontró una ruta hacia la salida.",
+                    "El autómata exploró el laberinto, pero no encontró salida.",
                     "Sin solución",
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        jugador = new Celda(entrada.fila, entrada.columna);
-        indiceExplorado = 0;
-        indiceSolucion = 0;
-        mostrandoSolucion = false;
+        PasoDFS pasoActual = pilaExploracion.peek();
+        Celda actual = pasoActual.celda;
 
-        timer = new javax.swing.Timer(25, e -> animarBusquedaYSolucion());
-        timer.start();
-    }
+        jugador.fila = actual.fila;
+        jugador.columna = actual.columna;
 
-    private void animarBusquedaYSolucion() {
-        if (!mostrandoSolucion) {
-            if (indiceExplorado < resultadoActual.explorados.size()) {
-                Celda actual = resultadoActual.explorados.get(indiceExplorado);
-
-                if (!mismaCelda(actual, entrada) && !mismaCelda(actual, salida)) {
-                    laberinto[actual.fila][actual.columna] = EXPLORADO;
-                }
-
-                indiceExplorado++;
-                panelLaberinto.repaint();
-                return;
-            }
-
-            mostrandoSolucion = true;
-            indiceSolucion = 0;
-            timer.setDelay(70);
-        }
-
-        if (indiceSolucion < resultadoActual.camino.size()) {
-            Celda paso = resultadoActual.camino.get(indiceSolucion);
-
-            jugador.fila = paso.fila;
-            jugador.columna = paso.columna;
-
-            if (!mismaCelda(paso, entrada) && !mismaCelda(paso, salida)) {
-                laberinto[paso.fila][paso.columna] = SOLUCION;
-            }
-
-            indiceSolucion++;
+        if (mismaCelda(actual, salida)) {
+            solucionEncontrada = true;
+            caminoFinal = new ArrayList<>(caminoActual);
+            limpiarSoloExploradoParaMostrarSolucion();
             panelLaberinto.repaint();
             return;
         }
 
-        detenerTimer();
+        Celda siguiente = obtenerSiguienteVecinoNoVisitado(pasoActual);
 
-        JOptionPane.showMessageDialog(
-                this,
-                "El laberinto fue resuelto automáticamente con A*.",
-                "Solución completada",
-                JOptionPane.INFORMATION_MESSAGE);
-    }
+        if (siguiente != null) {
+            visitado[siguiente.fila][siguiente.columna] = true;
 
-    private ResultadoBusqueda resolverConAEstrella(int[][] laberinto, Celda inicio, Celda meta) {
-        PriorityQueue<Nodo> abiertos = new PriorityQueue<>(
-                Comparator.comparingInt((Nodo n) -> n.f)
-                        .thenComparingInt(n -> n.h));
+            if (!mismaCelda(siguiente, entrada) && !mismaCelda(siguiente, salida)) {
+                laberinto[siguiente.fila][siguiente.columna] = EXPLORADO;
+            }
 
-        boolean[][] cerrado = new boolean[laberinto.length][laberinto[0].length];
-        int[][] costoG = new int[laberinto.length][laberinto[0].length];
-        Celda[][] padre = new Celda[laberinto.length][laberinto[0].length];
-        List<Celda> explorados = new ArrayList<>();
+            jugador.fila = siguiente.fila;
+            jugador.columna = siguiente.columna;
 
-        for (int fila = 0; fila < costoG.length; fila++) {
-            Arrays.fill(costoG[fila], Integer.MAX_VALUE);
+            caminoActual.add(new Celda(siguiente.fila, siguiente.columna));
+            pilaExploracion
+                    .push(new PasoDFS(new Celda(siguiente.fila, siguiente.columna), obtenerDireccionesAleatorias()));
+        } else {
+            // Backtracking: no hay más vecinos disponibles, el autómata retrocede.
+            Celda retroceso = pilaExploracion.pop().celda;
+
+            if (!mismaCelda(retroceso, entrada) && !mismaCelda(retroceso, salida)) {
+                laberinto[retroceso.fila][retroceso.columna] = EXPLORADO;
+            }
+
+            if (!caminoActual.isEmpty()) {
+                caminoActual.remove(caminoActual.size() - 1);
+            }
+
+            if (!pilaExploracion.isEmpty()) {
+                Celda anterior = pilaExploracion.peek().celda;
+                jugador.fila = anterior.fila;
+                jugador.columna = anterior.columna;
+            }
         }
 
-        costoG[inicio.fila][inicio.columna] = 0;
+        laberinto[entrada.fila][entrada.columna] = ENTRADA;
+        laberinto[salida.fila][salida.columna] = SALIDA;
+        panelLaberinto.repaint();
+    }
 
-        abiertos.add(new Nodo(
-                inicio,
-                0,
-                calcularHeuristica(inicio, meta)));
+    private Celda obtenerSiguienteVecinoNoVisitado(PasoDFS pasoActual) {
+        while (pasoActual.indiceDireccion < pasoActual.direcciones.size()) {
+            int[] direccion = pasoActual.direcciones.get(pasoActual.indiceDireccion);
+            pasoActual.indiceDireccion++;
 
-        int[][] direcciones = {
-                { -1, 0 },
-                { 1, 0 },
-                { 0, -1 },
-                { 0, 1 }
-        };
+            int nuevaFila = pasoActual.celda.fila + direccion[0];
+            int nuevaColumna = pasoActual.celda.columna + direccion[1];
 
-        while (!abiertos.isEmpty()) {
-            Nodo nodoActual = abiertos.poll();
-            Celda actual = nodoActual.celda;
-
-            if (cerrado[actual.fila][actual.columna]) {
-                continue;
+            if (esPosicionValidaParaCaminar(laberinto, nuevaFila, nuevaColumna)
+                    && !visitado[nuevaFila][nuevaColumna]) {
+                return new Celda(nuevaFila, nuevaColumna);
             }
+        }
 
-            cerrado[actual.fila][actual.columna] = true;
-            explorados.add(new Celda(actual.fila, actual.columna));
+        return null;
+    }
 
-            if (mismaCelda(actual, meta)) {
-                List<Celda> camino = reconstruirCamino(padre, inicio, meta);
-                return new ResultadoBusqueda(explorados, camino);
-            }
+    private List<int[]> obtenerDireccionesAleatorias() {
+        List<int[]> direcciones = new ArrayList<>();
+        direcciones.add(new int[] { -1, 0 });
+        direcciones.add(new int[] { 1, 0 });
+        direcciones.add(new int[] { 0, -1 });
+        direcciones.add(new int[] { 0, 1 });
+        Collections.shuffle(direcciones, random);
+        return direcciones;
+    }
 
-            for (int[] direccion : direcciones) {
-                int nuevaFila = actual.fila + direccion[0];
-                int nuevaColumna = actual.columna + direccion[1];
-
-                if (!esPosicionValidaParaCaminar(laberinto, nuevaFila, nuevaColumna)) {
-                    continue;
-                }
-
-                if (cerrado[nuevaFila][nuevaColumna]) {
-                    continue;
-                }
-
-                int nuevoCostoG = costoG[actual.fila][actual.columna] + 1;
-
-                if (nuevoCostoG < costoG[nuevaFila][nuevaColumna]) {
-                    costoG[nuevaFila][nuevaColumna] = nuevoCostoG;
-                    padre[nuevaFila][nuevaColumna] = new Celda(actual.fila, actual.columna);
-
-                    Celda vecino = new Celda(nuevaFila, nuevaColumna);
-                    int h = calcularHeuristica(vecino, meta);
-
-                    abiertos.add(new Nodo(vecino, nuevoCostoG, h));
+    private void limpiarSoloExploradoParaMostrarSolucion() {
+        for (int fila = 0; fila < laberinto.length; fila++) {
+            for (int columna = 0; columna < laberinto[0].length; columna++) {
+                if (laberinto[fila][columna] == EXPLORADO) {
+                    laberinto[fila][columna] = CAMINO;
                 }
             }
         }
 
-        return new ResultadoBusqueda(explorados, new ArrayList<>());
+        laberinto[entrada.fila][entrada.columna] = ENTRADA;
+        laberinto[salida.fila][salida.columna] = SALIDA;
     }
 
-    private int calcularHeuristica(Celda a, Celda b) {
-        return Math.abs(a.fila - b.fila) + Math.abs(a.columna - b.columna);
-    }
-
-    private List<Celda> reconstruirCamino(Celda[][] padre, Celda inicio, Celda meta) {
-        List<Celda> camino = new ArrayList<>();
-        Celda actual = new Celda(meta.fila, meta.columna);
-
-        camino.add(actual);
-
-        while (!mismaCelda(actual, inicio)) {
-            actual = padre[actual.fila][actual.columna];
-
-            if (actual == null) {
-                return new ArrayList<>();
-            }
-
-            camino.add(new Celda(actual.fila, actual.columna));
+    private void animarCaminoFinal() {
+        if (caminoFinal.isEmpty()) {
+            detenerTimer();
+            JOptionPane.showMessageDialog(
+                    this,
+                    "El autómata exploró y encontró la salida.",
+                    "Solución completada",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
         }
 
-        Collections.reverse(camino);
-        return camino;
+        Celda paso = caminoFinal.remove(0);
+        jugador.fila = paso.fila;
+        jugador.columna = paso.columna;
+
+        if (!mismaCelda(paso, entrada) && !mismaCelda(paso, salida)) {
+            laberinto[paso.fila][paso.columna] = SOLUCION;
+        }
+
+        laberinto[entrada.fila][entrada.columna] = ENTRADA;
+        laberinto[salida.fila][salida.columna] = SALIDA;
+        panelLaberinto.repaint();
     }
 
     private boolean esPosicionValidaParaCaminar(int[][] laberinto, int fila, int columna) {
@@ -653,29 +646,16 @@ public class LaberintoSwing extends JFrame {
         }
     }
 
-    static class Nodo {
+    static class PasoDFS {
 
         Celda celda;
-        int g;
-        int h;
-        int f;
+        List<int[]> direcciones;
+        int indiceDireccion;
 
-        Nodo(Celda celda, int g, int h) {
+        PasoDFS(Celda celda, List<int[]> direcciones) {
             this.celda = celda;
-            this.g = g;
-            this.h = h;
-            this.f = g + h;
-        }
-    }
-
-    static class ResultadoBusqueda {
-
-        List<Celda> explorados;
-        List<Celda> camino;
-
-        ResultadoBusqueda(List<Celda> explorados, List<Celda> camino) {
-            this.explorados = explorados;
-            this.camino = camino;
+            this.direcciones = direcciones;
+            this.indiceDireccion = 0;
         }
     }
 
@@ -779,7 +759,7 @@ public class LaberintoSwing extends JFrame {
             g.setFont(new Font("Arial", Font.BOLD, 14));
 
             g.drawString(
-                    "Laberinto autónomo: genera varios caminos y presiona Resolver automáticamente para que el jugador azul llegue solo a la salida.",
+                    "Autómata explorador: prueba caminos, marca lo explorado, retrocede en callejones y luego muestra la ruta final.",
                     20,
                     25);
 
@@ -787,10 +767,10 @@ public class LaberintoSwing extends JFrame {
 
             dibujarLeyenda(g, 20, y, Color.GREEN, "Entrada");
             dibujarLeyenda(g, 130, y, Color.RED, "Salida");
-            dibujarLeyendaCircular(g, 230, y, Color.BLUE, "Jugador");
+            dibujarLeyendaCircular(g, 230, y, Color.BLUE, "Autómata");
             dibujarLeyenda(g, 340, y, Color.DARK_GRAY, "Pared");
-            dibujarLeyenda(g, 430, y, Color.ORANGE, "Explorado A*");
-            dibujarLeyenda(g, 570, y, Color.CYAN, "Solución final");
+            dibujarLeyenda(g, 430, y, Color.ORANGE, "Explorado");
+            dibujarLeyenda(g, 550, y, Color.CYAN, "Ruta final");
         }
 
         private void dibujarLeyenda(Graphics g, int x, int y, Color color, String texto) {
