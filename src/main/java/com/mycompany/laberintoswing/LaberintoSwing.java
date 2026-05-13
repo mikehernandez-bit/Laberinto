@@ -107,12 +107,12 @@ public class LaberintoSwing extends JFrame {
         /*
          * ALGORITMO EXTRA:
          * Se abren paredes internas para crear ciclos y caminos alternativos.
-         * Así el laberinto no queda tan lineal.
+         * Se evita abrir paredes que formen espacios grandes 2x2.
          */
         crearCaminosAlternativos(laberinto, dificultad);
 
         /*
-         * BFS se usa solo para colocar una entrada y una salida alejadas.
+         * BFS se usa para colocar una entrada y una salida alejadas.
          */
         colocarEntradaYSalidaLejanas(laberinto);
 
@@ -242,7 +242,7 @@ public class LaberintoSwing extends JFrame {
 
         int abiertos = 0;
         int intentos = 0;
-        int maxIntentos = cantidadObjetivo * 40;
+        int maxIntentos = cantidadObjetivo * 60;
 
         while (abiertos < cantidadObjetivo && intentos < maxIntentos) {
             intentos++;
@@ -256,7 +256,12 @@ public class LaberintoSwing extends JFrame {
 
             int vecinosCamino = contarVecinosCamino(laberinto, fila, columna);
 
-            if (vecinosCamino >= 2) {
+            /*
+             * Solo se abre si:
+             * 1. La pared conecta caminos.
+             * 2. No crea espacios 2x2.
+             */
+            if (vecinosCamino >= 2 && puedeAbrirSinCrearBloque2x2(laberinto, fila, columna)) {
                 laberinto[fila][columna] = CAMINO;
                 abiertos++;
             }
@@ -265,21 +270,62 @@ public class LaberintoSwing extends JFrame {
         reducirCallejonesSinSalida(laberinto, dificultad);
     }
 
+    /*
+     * Este método evita que se formen huecos grandes de 2x2.
+     * Simula abrir la pared y revisa si alrededor se formaría
+     * un cuadrado de 4 caminos juntos.
+     */
+    private boolean puedeAbrirSinCrearBloque2x2(int[][] laberinto, int fila, int columna) {
+        if (laberinto[fila][columna] != PARED) {
+            return false;
+        }
+
+        for (int df = -1; df <= 0; df++) {
+            for (int dc = -1; dc <= 0; dc++) {
+                int f = fila + df;
+                int c = columna + dc;
+
+                if (f < 0 || f + 1 >= laberinto.length
+                        || c < 0 || c + 1 >= laberinto[0].length) {
+                    continue;
+                }
+
+                int caminos = 0;
+
+                for (int i = f; i <= f + 1; i++) {
+                    for (int j = c; j <= c + 1; j++) {
+                        if (i == fila && j == columna) {
+                            caminos++;
+                        } else if (laberinto[i][j] != PARED) {
+                            caminos++;
+                        }
+                    }
+                }
+
+                if (caminos == 4) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     private void reducirCallejonesSinSalida(int[][] laberinto, int dificultad) {
         int porcentaje;
 
         switch (dificultad) {
             case 1:
-                porcentaje = 20;
+                porcentaje = 10;
                 break;
             case 2:
-                porcentaje = 35;
+                porcentaje = 20;
                 break;
             case 3:
-                porcentaje = 50;
+                porcentaje = 30;
                 break;
             default:
-                porcentaje = 30;
+                porcentaje = 15;
                 break;
         }
 
@@ -314,7 +360,8 @@ public class LaberintoSwing extends JFrame {
             int nuevaColumna = columna + direccion[1];
 
             if (estaDentroDelAreaInterna(laberinto, nuevaFila, nuevaColumna)
-                    && laberinto[nuevaFila][nuevaColumna] == PARED) {
+                    && laberinto[nuevaFila][nuevaColumna] == PARED
+                    && puedeAbrirSinCrearBloque2x2(laberinto, nuevaFila, nuevaColumna)) {
                 paredes.add(new Celda(nuevaFila, nuevaColumna));
             }
         }
@@ -424,11 +471,11 @@ public class LaberintoSwing extends JFrame {
 
     /*
      * RESOLUCIÓN AUTÓNOMA EXPLORANDO:
-     * Aquí ya NO se usa A* como solución rápida.
-     * Ahora el autómata explora con DFS + backtracking.
-     * El jugador azul se mueve físicamente por el laberinto,
-     * prueba caminos, retrocede si llega a un callejón sin salida
-     * y finalmente marca la ruta correcta en cian.
+     * El autómata NO resuelve instantáneamente.
+     * Usa DFS con Backtracking.
+     * El jugador azul prueba caminos, marca lo explorado,
+     * retrocede si llega a un callejón sin salida
+     * y finalmente muestra la ruta correcta.
      */
     private void iniciarExploracionAutomatica() {
         detenerTimer();
@@ -443,7 +490,9 @@ public class LaberintoSwing extends JFrame {
         jugador = new Celda(entrada.fila, entrada.columna);
         visitado[entrada.fila][entrada.columna] = true;
         caminoActual.add(new Celda(entrada.fila, entrada.columna));
-        pilaExploracion.push(new PasoDFS(new Celda(entrada.fila, entrada.columna), obtenerDireccionesAleatorias()));
+        pilaExploracion.push(new PasoDFS(
+                new Celda(entrada.fila, entrada.columna),
+                obtenerDireccionesAleatorias()));
 
         timer = new javax.swing.Timer(90, e -> avanzarExploracionDFS());
         timer.start();
@@ -492,10 +541,15 @@ public class LaberintoSwing extends JFrame {
             jugador.columna = siguiente.columna;
 
             caminoActual.add(new Celda(siguiente.fila, siguiente.columna));
-            pilaExploracion
-                    .push(new PasoDFS(new Celda(siguiente.fila, siguiente.columna), obtenerDireccionesAleatorias()));
+            pilaExploracion.push(new PasoDFS(
+                    new Celda(siguiente.fila, siguiente.columna),
+                    obtenerDireccionesAleatorias()));
         } else {
-            // Backtracking: no hay más vecinos disponibles, el autómata retrocede.
+            /*
+             * Backtracking:
+             * No hay vecinos disponibles.
+             * El autómata retrocede al punto anterior.
+             */
             Celda retroceso = pilaExploracion.pop().celda;
 
             if (!mismaCelda(retroceso, entrada) && !mismaCelda(retroceso, salida)) {
@@ -541,7 +595,9 @@ public class LaberintoSwing extends JFrame {
         direcciones.add(new int[] { 1, 0 });
         direcciones.add(new int[] { 0, -1 });
         direcciones.add(new int[] { 0, 1 });
+
         Collections.shuffle(direcciones, random);
+
         return direcciones;
     }
 
@@ -570,6 +626,7 @@ public class LaberintoSwing extends JFrame {
         }
 
         Celda paso = caminoFinal.remove(0);
+
         jugador.fila = paso.fila;
         jugador.columna = paso.columna;
 
